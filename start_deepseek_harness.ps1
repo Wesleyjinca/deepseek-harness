@@ -21,6 +21,7 @@ if ($listener) {
 
 Write-Host 'Checking DeepSeek Harness updates...' -ForegroundColor Cyan
 $branch = (git branch --show-current).Trim()
+$updateBranch = 'master'
 if ([string]::IsNullOrWhiteSpace($branch)) {
     Write-Warning 'Cannot determine the current Git branch. Skipping update.'
 } else {
@@ -39,23 +40,28 @@ if ([string]::IsNullOrWhiteSpace($branch)) {
         $changes | Select-Object -First 12 | ForEach-Object { Write-Host "  $_" }
     } else {
         try {
-            Invoke-Checked 'git' @('fetch', 'origin', $branch)
+            Invoke-Checked 'git' @('fetch', 'origin', $updateBranch)
             $localCommit = (git rev-parse 'HEAD').Trim()
-            $remoteCommit = (git rev-parse "origin/$branch").Trim()
+            $remoteCommit = (git rev-parse "origin/$updateBranch").Trim()
 
             if ($localCommit -ne $remoteCommit) {
-                $isBehind = git merge-base --is-ancestor HEAD "origin/$branch"
+                $isBehind = git merge-base --is-ancestor HEAD "origin/$updateBranch"
                 if ($LASTEXITCODE -ne 0) {
-                    Write-Warning "Local branch and origin/$branch have diverged. Skipping automatic update."
+                    Write-Warning "Local branch $branch contains custom commits. Merging origin/$updateBranch..."
+                    git merge --no-edit "origin/$updateBranch"
+                    if ($LASTEXITCODE -ne 0) {
+                        git merge --abort
+                        throw "Merge conflict with origin/$updateBranch; update was aborted and local code was preserved."
+                    }
                 } else {
-                    Write-Host "New version found. Updating from origin/$branch..." -ForegroundColor Yellow
-                    Invoke-Checked 'git' @('pull', '--ff-only', 'origin', $branch)
-                    Write-Host 'Installing dependencies...' -ForegroundColor Yellow
-                    Invoke-Checked 'corepack' @('pnpm', 'install')
-                    Write-Host 'Building DeepSeek Harness...' -ForegroundColor Yellow
-                    Invoke-Checked 'corepack' @('pnpm', 'run', 'build')
-                    Write-Host 'Update and build completed.' -ForegroundColor Green
+                    Write-Host "New version found. Updating from origin/$updateBranch..." -ForegroundColor Yellow
+                    Invoke-Checked 'git' @('pull', '--ff-only', 'origin', $updateBranch)
                 }
+                Write-Host 'Installing dependencies...' -ForegroundColor Yellow
+                Invoke-Checked 'corepack' @('pnpm', 'install')
+                Write-Host 'Building DeepSeek Harness...' -ForegroundColor Yellow
+                Invoke-Checked 'corepack' @('pnpm', 'run', 'build')
+                Write-Host 'Update and build completed.' -ForegroundColor Green
             } else {
                 Write-Host 'Already up to date.' -ForegroundColor Green
             }
