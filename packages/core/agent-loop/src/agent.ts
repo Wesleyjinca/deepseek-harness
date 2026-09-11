@@ -21,6 +21,7 @@ import {
   BlockAssembler,
   LlmError,
   createAssistantMessage,
+  createUserMessage,
   deepFreeze,
   errorChain,
   markAgentLoopRequest,
@@ -51,6 +52,18 @@ type PreparedStep =
   | { kind: 'reject' }
   | { kind: 'enter'; messages: UserMessage[]; assembly: PromptAssembly }
 
+interface MaxTokenAutoContinueConfig {
+  autoContinueMaxTokens?: boolean
+  maxTokenAutoContinues?: number
+  maxTokenAutoContinuePrompt?: string
+}
+
+const FALLBACK_MAX_TOKEN_AUTO_CONTINUE_PROMPT = [
+  'Continue exactly from where the previous assistant message stopped because it reached the output token limit.',
+  'Do not repeat completed text.',
+  'Continue in the same language and format.',
+].join(' ')
+
 /** Remove adapter-derived values before plugins propose the next request config. */
 function requestProposal(header: EpochHeader): LlmCallConfig {
   if (header.adapterDefaults === undefined) return header.config
@@ -76,6 +89,7 @@ export class ReactLoopAgent implements Agent {
   /** Whether this loop instance has appended its initial/resume request anchor. */
   private requestHeaderLogged = false
   private readonly runtimeContext: RuntimeContextProjection
+  private maxTokenAutoContinueCount = 0
 
   constructor(
     private loopCtx: Context,
@@ -94,6 +108,30 @@ export class ReactLoopAgent implements Agent {
     this.scope = createScope(loopCtx, this)
     this.ctx = this.scope.ctx.extend({ agent: this })
     this.runtimeContext = new RuntimeContextProjection(this.ctx, session)
+  }
+
+  private maxTokenAutoContinueConfig(): MaxTokenAutoContinueConfig {
+    const loopCtx = this.loopCtx as Context & {
+      agentLoop?: { config?: MaxTokenAutoContinueConfig }
+    }
+    return loopCtx.agentLoop?.config ?? {}
+  }
+
+  private maybeQueueMaxTokenAutoContinue(stepHitMaxTokens: boolean): void {
+    if (!stepHitMaxTokens) return
+    if (this.inbox.nextStep.length !== 0) return
+    const config = this.maxTokenAutoContinueConfig()
+    if (config.autoContinueMaxTokens !== true) return
+    const limit = config.maxTokenAutoContinues ?? 8
+    if (this.maxTokenAutoContinueCount >= limit) return
+    this.maxTokenAutoContinueCount += 1
+    this.steer(createUserMessage({
+      content: [{
+        type: 'text',
+        text: config.maxTokenAutoContinuePrompt ?? FALLBACK_MAX_TOKEN_AUTO_CONTINUE_PROMPT,
+      }],
+      source: { kind: 'plugin', plugin: 'agent-loop-auto-continue' },
+    }))
   }
 
   get status(): AgentStatus {
@@ -257,6 +295,7 @@ export class ReactLoopAgent implements Agent {
       this.throwError(error)
     }
     phase.turn = turn
+    this.maxTokenAutoContinueCount = 0
     let turnEnds: TurnEndReason | null = null
     let target: InboxTarget = 'next-turn'
     try {
@@ -278,6 +317,7 @@ export class ReactLoopAgent implements Agent {
         signal.throwIfAborted()
         this.session.append('step/start', { turn, step })
         phase.step = step
+        let stepHitMaxTokens = false
         try {
           for (const message of decision.messages) {
             this.session.append('user/message', message, { surfaceOp: 'append' })
@@ -288,6 +328,7 @@ export class ReactLoopAgent implements Agent {
           // max-tokens stays sticky: a later completed step must not
           // downgrade the turn outcome.
           if (turnEnds === null || turnEnds.kind !== 'max-tokens') turnEnds = stepEnd
+          stepHitMaxTokens = stepEnd?.kind === 'max-tokens'
         } finally {
           this.session.append('step/end', { turn, step })
         }
@@ -296,6 +337,7 @@ export class ReactLoopAgent implements Agent {
           await this.dispatch.serial('agent/turn-stopping', { turn, signal })
           signal.throwIfAborted()
         }
+        this.maybeQueueMaxTokenAutoContinue(stepHitMaxTokens)
         if (turnEnds && this.inbox.nextStep.length === 0) break
         target = 'next-step'
       }

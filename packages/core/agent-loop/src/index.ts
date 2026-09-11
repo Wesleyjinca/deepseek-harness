@@ -138,6 +138,28 @@ function resolveMaxParallelToolCalls(value: number | undefined): number {
   return maxParallelToolCalls
 }
 
+const DEFAULT_MAX_TOKEN_AUTO_CONTINUE_PROMPT = [
+  'Continue exactly from where the previous assistant message stopped because it reached the output token limit.',
+  'Do not repeat completed text.',
+  'Continue in the same language and format.',
+].join(' ')
+
+/** Resolve how many automatic max-token continuations one turn may request. */
+function resolveMaxTokenAutoContinues(value: number | undefined): number {
+  const maxTokenAutoContinues = value ?? 8
+  if (!Number.isInteger(maxTokenAutoContinues) || maxTokenAutoContinues < 1) {
+    throw new Error('maxTokenAutoContinues must be a positive integer')
+  }
+  return maxTokenAutoContinues
+}
+
+/** Resolve the instruction used for an automatic max-token continuation step. */
+function resolveMaxTokenAutoContinuePrompt(value: string | undefined): string {
+  const prompt = value ?? DEFAULT_MAX_TOKEN_AUTO_CONTINUE_PROMPT
+  if (prompt.trim() === '') throw new Error('maxTokenAutoContinuePrompt must not be empty')
+  return prompt
+}
+
 /** Reject an output-token cap that cannot be represented exactly on the request wire. */
 function assertAgentOptions(options: AgentOptions): void {
   if (options.maxTokens !== undefined
@@ -244,11 +266,20 @@ export const AGENT_LOOP_SETTINGS_NAMESPACE = settingsNamespace('agent-loop')
 export interface AgentLoopSettings {
   /** Maximum parallel-safe calls in flight per agent step. */
   maxParallelToolCalls: number
+  /** Automatically continue a turn when the model stops at its output-token limit. */
+  autoContinueMaxTokens: boolean
+  /** Maximum automatic continuations allowed within one turn. */
+  maxTokenAutoContinues: number
+  /** User instruction inserted when automatically continuing after max-tokens. */
+  maxTokenAutoContinuePrompt: string
 }
 
 /** Schema of the agent-loop settings section. */
 export const AGENT_LOOP_SETTINGS_SCHEMA: z<AgentLoopSettings> = z.object({
   maxParallelToolCalls: z.number().step(1).min(1).default(DEFAULT_MAX_PARALLEL_TOOL_CALLS),
+  autoContinueMaxTokens: z.boolean().default(false),
+  maxTokenAutoContinues: z.number().step(1).min(1).default(8),
+  maxTokenAutoContinuePrompt: z.string().default(DEFAULT_MAX_TOKEN_AUTO_CONTINUE_PROMPT),
 })
 
 /** Agent-loop plugin configuration. */
@@ -258,6 +289,12 @@ export interface Config {
    * omission defaults to {@link DEFAULT_MAX_PARALLEL_TOOL_CALLS}.
    */
   maxParallelToolCalls?: number
+  /** Automatically continue a turn when the model stops at its output-token limit. */
+  autoContinueMaxTokens?: boolean
+  /** Maximum automatic continuations allowed within one turn. */
+  maxTokenAutoContinues?: number
+  /** User instruction inserted when automatically continuing after max-tokens. */
+  maxTokenAutoContinuePrompt?: string
   /** Agents created or resumed at plugin startup. */
   agents: (AgentOptions & {
     /** Stable config label used in logs and as the fresh combined-id prefix. */
@@ -299,6 +336,9 @@ export class AgentLoop extends Service implements AgentFactory {
   /** Runtime schema for declarative agents. */
   static Config = z.object({
     maxParallelToolCalls: z.number().step(1).min(1).default(DEFAULT_MAX_PARALLEL_TOOL_CALLS),
+    autoContinueMaxTokens: z.boolean().default(false),
+    maxTokenAutoContinues: z.number().step(1).min(1).default(8),
+    maxTokenAutoContinuePrompt: z.string().default(DEFAULT_MAX_TOKEN_AUTO_CONTINUE_PROMPT),
     agents: z.array(z.object({
       id: z.string().required(),
       sessionId: z.string().min(1),
@@ -320,6 +360,9 @@ export class AgentLoop extends Service implements AgentFactory {
     super(ctx, 'agentLoop')
     const entry: AgentLoopSettings = {
       maxParallelToolCalls: resolveMaxParallelToolCalls(config.maxParallelToolCalls),
+      autoContinueMaxTokens: config.autoContinueMaxTokens ?? false,
+      maxTokenAutoContinues: resolveMaxTokenAutoContinues(config.maxTokenAutoContinues),
+      maxTokenAutoContinuePrompt: resolveMaxTokenAutoContinuePrompt(config.maxTokenAutoContinuePrompt),
     }
     let source: () => AgentLoopSettings = () => entry
     this.config = {
@@ -331,12 +374,25 @@ export class AgentLoop extends Service implements AgentFactory {
       get maxParallelToolCalls() {
         return source().maxParallelToolCalls
       },
+      get autoContinueMaxTokens() {
+        return source().autoContinueMaxTokens
+      },
+      get maxTokenAutoContinues() {
+        return source().maxTokenAutoContinues
+      },
+      get maxTokenAutoContinuePrompt() {
+        return source().maxTokenAutoContinuePrompt
+      },
     }
     installSettingsSection(ctx, AGENT_LOOP_SETTINGS_NAMESPACE, AGENT_LOOP_SETTINGS_SCHEMA, entry, {
       // The schema admits any integer above zero; `resolveMaxParallelToolCalls`
       // owns the whole rule, so refusing here keeps the running scheduler on
       // its last good cap instead of failing at the next tool group.
-      validate: value => void resolveMaxParallelToolCalls(value.maxParallelToolCalls),
+      validate: (value) => {
+        resolveMaxParallelToolCalls(value.maxParallelToolCalls)
+        resolveMaxTokenAutoContinues(value.maxTokenAutoContinues)
+        resolveMaxTokenAutoContinuePrompt(value.maxTokenAutoContinuePrompt)
+      },
       setSource: (current) => {
         source = current
       },
