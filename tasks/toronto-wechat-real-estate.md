@@ -25,13 +25,13 @@
 6. 选择其中 1 个主题，标记为“本周优先发布”，并说明选择理由。
 7. 生成获客 CTA，统一使用：
    “回复【区域名 + 预算】，领取该区域房源和购房成本对比表。”
-8. 把结果写入以下文件：
-   - `output/YYYY-MM-DD/market-brief.md`
-   - `output/YYYY-MM-DD/topic-ranking.md`
-   - `output/YYYY-MM-DD/content-pack.md`
-   - `output/YYYY-MM-DD/lead-replies.md`
-   - `data/sources/YYYY-MM-DD.md`
-   - `data/questions/customer-questions.md`
+8. 把结果写入 `C:\Tools\AI\model\deepseek-harness\output\RealEstate\`，按日期保存：
+   - `C:\Tools\AI\model\deepseek-harness\output\RealEstate\YYYY-MM-DD\market-brief.md`
+   - `C:\Tools\AI\model\deepseek-harness\output\RealEstate\YYYY-MM-DD\topic-ranking.md`
+   - `C:\Tools\AI\model\deepseek-harness\output\RealEstate\YYYY-MM-DD\content-pack.md`
+   - `C:\Tools\AI\model\deepseek-harness\output\RealEstate\YYYY-MM-DD\lead-replies.md`
+   - `C:\Tools\AI\model\deepseek-harness\output\RealEstate\YYYY-MM-DD\sources.md`
+   - `C:\Tools\AI\model\deepseek-harness\output\RealEstate\customer-questions.md`
 
 ## 内容规则
 
