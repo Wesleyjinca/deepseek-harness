@@ -22,6 +22,7 @@ if ($listener) {
 Write-Host 'Checking DeepSeek Harness updates...' -ForegroundColor Cyan
 $branch = (git branch --show-current).Trim()
 $updateBranch = 'master'
+$updateRemote = 'upstream'
 if ([string]::IsNullOrWhiteSpace($branch)) {
     Write-Warning 'Cannot determine the current Git branch. Skipping update.'
 } else {
@@ -40,27 +41,30 @@ if ([string]::IsNullOrWhiteSpace($branch)) {
         $changes | Select-Object -First 12 | ForEach-Object { Write-Host "  $_" }
     } else {
         try {
-            Invoke-Checked 'git' @('fetch', 'origin', $updateBranch)
+            Invoke-Checked 'git' @('fetch', $updateRemote, $updateBranch)
             $localCommit = (git rev-parse 'HEAD').Trim()
-            $remoteCommit = (git rev-parse "origin/$updateBranch").Trim()
+            $remoteRef = "$updateRemote/$updateBranch"
+            $remoteCommit = (git rev-parse $remoteRef).Trim()
 
             if ($localCommit -ne $remoteCommit) {
-                $isBehind = git merge-base --is-ancestor HEAD "origin/$updateBranch"
+                $isBehind = git merge-base --is-ancestor HEAD $remoteRef
                 if ($LASTEXITCODE -ne 0) {
-                    Write-Warning "Local branch $branch contains custom commits. Merging origin/$updateBranch..."
-                    git merge --no-edit "origin/$updateBranch"
+                    Write-Warning "Local branch $branch contains custom commits. Merging $remoteRef..."
+                    git merge --no-edit $remoteRef
                     if ($LASTEXITCODE -ne 0) {
                         git merge --abort
-                        throw "Merge conflict with origin/$updateBranch; update was aborted and local code was preserved."
+                        throw "Merge conflict with $remoteRef; update was aborted and local code was preserved."
                     }
                 } else {
-                    Write-Host "New version found. Updating from origin/$updateBranch..." -ForegroundColor Yellow
-                    Invoke-Checked 'git' @('pull', '--ff-only', 'origin', $updateBranch)
+                    Write-Host "New version found. Updating from $remoteRef..." -ForegroundColor Yellow
+                    Invoke-Checked 'git' @('merge', '--ff-only', $remoteRef)
                 }
                 Write-Host 'Installing dependencies...' -ForegroundColor Yellow
                 Invoke-Checked 'corepack' @('pnpm', 'install')
                 Write-Host 'Building DeepSeek Harness...' -ForegroundColor Yellow
                 Invoke-Checked 'corepack' @('pnpm', 'run', 'build')
+                Write-Host "Pushing updated $branch to origin..." -ForegroundColor Yellow
+                Invoke-Checked 'git' @('push', '--no-verify', 'origin', $branch)
                 Write-Host 'Update and build completed.' -ForegroundColor Green
             } else {
                 Write-Host 'Already up to date.' -ForegroundColor Green
